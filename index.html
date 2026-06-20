@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Giraffa Runner V7</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;touch-action:none;image-rendering:pixelated}
+body{background:#87CEEB;overflow:hidden;font-family:'Courier New',monospace;user-select:none}
+#game{position:relative;width:100vw;height:100vh}
+canvas{background:#87CEEB;display:block;width:100%;height:100%}
+#ui{position:absolute;top:15px;left:15px;color:#fff;font-size:26px;text-shadow:3px 3px #000;z-index:5;pointer-events:none}
+
+#controls{position:absolute;bottom:35px;width:100%;height:130px;pointer-events:none;z-index:10}
+#left{position:absolute;left:35px;bottom:0;pointer-events:auto}
+#right{position:absolute;right:35px;bottom:0;pointer-events:auto;display:flex;gap:25px}
+
+#jump{width:120px;height:120px;background:#FF4444;border:6px solid #AA0000;border-radius:25px;color:#fff;font-size:40px;font-weight:bold}
+#jump:active{background:#FF6666;transform:scale(0.93)}
+
+.btn{width:110px;height:110px;background:#222;border:6px solid #666;border-radius:22px;color:#fff;font-size:38px;font-weight:bold}
+.btn:active{background:#555;transform:scale(0.93)}
+
+#start{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#000;padding:45px;border:6px solid #fff;text-align:center;color:#fff;z-index:20}
+#start button{margin-top:25px;padding:22px 45px;font-size:26px;background:#1DB954;border:0;color:#000;font-weight:bold;cursor:pointer}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div id="game">
+<canvas id="c"></canvas>
+<div id="ui">LV <span id="lv">1</span>/5 | <span id="t">180</span>s</div>
+
+<div id="controls">
+  <div id="left">
+    <button id="jump">↑</button>
+  </div>
+  <div id="right">
+    <button class="btn" id="back">←</button>
+    <button class="btn" id="fwd">→</button>
+  </div>
+</div>
+
+<div id="start">
+  <h1>GIRAFFA RUNNER V7</h1>
+  <p style="margin:15px 0;font-size:16px">Buche visibili + distanziate</p>
+  <button onclick="startGame()">START</button>
+</div>
+</div>
+
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+c.width=800;c.height=400;
+
+let audioCtx;
+function initAudio(){if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)()}
+function beep(f,d,t='square'){initAudio();let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type=t;o.frequency.value=f;g.gain.setValueAtTime(0.12,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+d);o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+d)}
+function soundJump(){beep(680,0.07);setTimeout(()=>beep(920,0.07),60)}
+function soundDeath(){beep(150,0.3,'sawtooth');setTimeout(()=>beep(90,0.5,'sawtooth'),250)}
+
+const CENTER_X=350;
+let giraffa={x:CENTER_X,y:280,w:46,h:60,vy:0,onGround:true};
+let world={scroll:0,speed:4.2,level:1,time:180,platforms:[],obstacles:[],flag:null,gameOver:false,win:false,started:false};
+let keys={fwd:false,back:false,jump:false};
+let clouds=[{x:220,y:55},{x:520,y:85},{x:780,y:45}];
+
+// V7: BUCHE E OSTACOLI DISTANZIATI
+function genLevel(lv){
+  world.platforms=[];world.obstacles=[];
+  let pos=0;
+  world.platforms.push({x:0,y:340,w:450,h:60});
+  pos=450;
+
+  let lastObstaclePos=-999;
+  let lastHolePos=-999;
+
+  for(let i=0;i<220;i++){
+    let makeHole = Math.random()<0.06 && i>10 && pos - lastHolePos > 200 && pos - lastObstaclePos > 150;
+    if(makeHole){
+      pos+=100; // buca da 100px
+      lastHolePos = pos;
+    }
+    world.platforms.push({x:pos,y:340,w:50,h:60});
+
+    // ostacolo solo se lontano da ultimo ostacolo E da ultima buca
+    if(pos - lastObstaclePos > 150 && pos - lastHolePos > 150 && Math.random()<0.25+lv*0.025){
+      let t=Math.random();
+      if(t<0.65) {
+        world.obstacles.push({x:pos+6,y:292,w:46,h:48,type:'pipe'});
+      } else {
+        world.obstacles.push({x:pos+8,y:308,w:42,h:32,type:'rock'});
+      }
+      lastObstaclePos = pos;
+    }
+    pos+=52;
+  }
+  world.flag={x:pos+220,y:280,w:26,h:60,raised:0};
+}
+
+function drawPixel(x,y,w,h,color){
+  ctx.fillStyle=color;
+  for(let i=0;i<w;i+=4)for(let j=0;j<h;j+=4)ctx.fillRect(x+i,y+j,4,4);
+}
+
+function drawGiraffa(){
+  drawPixel(CENTER_X,giraffa.y,46,60,'#FFD700');
+  drawPixel(CENTER_X+20,giraffa.y-45,12,45,'#FFD700');
+  drawPixel(CENTER_X+16,giraffa.y-55,22,10,'#FFD700');
+  drawPixel(CENTER_X+18,giraffa.y-53,5,5,'#000');
+  drawPixel(CENTER_X+20,giraffa.y-58,4,4,'#FFD700');
+  drawPixel(CENTER_X+14,giraffa.y-58,4,4,'#FFD700');
+  drawPixel(CENTER_X-7,giraffa.y+40,13,20,'#FFD700');
+  drawPixel(CENTER_X+39,giraffa.y+40,13,20,'#FFD700');
+  drawPixel(CENTER_X+10,giraffa.y+14,12,12,'#FFA500');
+  drawPixel(CENTER_X+28,giraffa.y+30,12,12,'#FFA500');
+  drawPixel(CENTER_X+20,giraffa.y-24,12,12,'#FFA500');
+  drawPixel(CENTER_X-9,giraffa.y+22,7,16,'#FFD700');
+  drawPixel(CENTER_X-12,giraffa.y+30,4,4,'#000');
+}
+
+function drawObstacle(o,px){
+  if(o.type=='pipe'){
+    drawPixel(px,o.y,46,48,'#00AA00');
+    drawPixel(px+7,o.y+7,32,32,'#00DD00');
+    drawPixel(px,o.y-14,46,14,'#008800');
+  }
+  if(o.type=='rock'){
+    drawPixel(px,o.y,42,32,'#696969');
+    drawPixel(px+13,o.y+7,8,8,'#2F2F2F');
+    drawPixel(px+6,o.y+14,11,11,'#555');
+  }
+}
+
+function update(){
+  if(!world.started||world.gameOver||world.win) return;
+
+  world.time-=1/60;
+  if(world.time<=0){world.gameOver=true;soundDeath();return;}
+  document.getElementById('t').innerText=Math.ceil(world.time);
+
+  let vx=0;
+  if(keys.fwd) vx=world.speed;
+  if(keys.back) vx=-world.speed*0.7;
+
+  if(keys.jump&&giraffa.onGround){giraffa.vy=-14.5;giraffa.onGround=false;soundJump();}
+
+  giraffa.vy+=0.68;
+  giraffa.y+=giraffa.vy;
+
+  world.scroll+=vx;
+
+  giraffa.onGround=false;
+  for(let p of world.platforms){
+    let px=p.x-world.scroll;
+    if(CENTER_X+46>px&&CENTER_X<px+p.w&&giraffa.y+60>=p.y-7&&giraffa.y+60<=p.y+25){
+      giraffa.y=p.y-60;giraffa.vy=0;giraffa.onGround=true;
+    }
+  }
+
+  if(!giraffa.onGround&&giraffa.y>450){world.gameOver=true;soundDeath();}
+
+  for(let o of world.obstacles){
+    let ox=o.x-world.scroll;
+    if(ox>-70&&ox<870){
+      if(CENTER_X+46>ox&&CENTER_X<ox+o.w&&giraffa.y+60>o.y&&giraffa.y<o.y+o.h){
+        world.gameOver=true;soundDeath();
+      }
+    }
+  }
+
+  let fx=world.flag.x-world.scroll;
+  if(CENTER_X>fx&&CENTER_X<fx+world.flag.w){
+    world.flag.raised=Math.min(60,world.flag.raised+4);
+    if(world.flag.raised>=60&&!world.win){
+      world.win=true;setTimeout(nextLevel,2000);
+    }
+  }
+
+  clouds.forEach(cl=>{cl.x-=0.6;if(cl.x<-130)cl.x=930});
+}
+
+// DRAW CON BUCHE VISIBILI
+function draw(){
+  ctx.clearRect(0,0,800,400);
+  ctx.fillStyle='#87CEEB';ctx.fillRect(0,0,800,400);
+
+  clouds.forEach(cl=>{
+    drawPixel(cl.x,cl.y,80,26,'#fff');
+    drawPixel(cl.x+18,cl.y-8,54,20,'#fff');
+  });
+
+  drawPixel(0,336,800,4,'#228B22');
+  drawPixel(0,340,800,60,'#8B4513');
+
+  // BUCHE VISIBILI - nero + spuntoni
+  let lastX = -world.scroll;
+  world.platforms.forEach((p,i)=>{
+    let px=p.x-world.scroll;
+    if(px - lastX > 60){
+      drawPixel(lastX, 340, px-lastX, 60, '#000');
+      for(let s=lastX+10; s<px-10; s+=20){
+        drawPixel(s, 330, 8, 10, '#8B0000');
+      }
+    }
+    lastX = px + p.w;
+  });
+
+  world.platforms.forEach(p=>{
+    let px=p.x-world.scroll;
+    if(px>-80&&px<880){
+      drawPixel(px,p.y-5,p.w,5,'#228B22');
+      drawPixel(px,p.y,p.w,p.h,'#8B4513');
+    }
+  });
+
+  world.obstacles.forEach(o=>{
+    let ox=o.x-world.scroll;
+    if(ox>-80&&ox<880) drawObstacle(o,ox);
+  });
+
+  let fx=world.flag.x-world.scroll;
+  if(fx>-60&&fx<860){
+    drawPixel(fx,world.flag.y+60-world.flag.raised,26,world.flag.raised,'#FF0000');
+    drawPixel(fx,world.flag.y,26,10,'#FF0000');
+  }
+
+  drawGiraffa();
+
+  if(world.gameOver){
+    ctx.fillStyle='rgba(0,0,0,0.85)';ctx.fillRect(0,0,800,400);
+    ctx.fillStyle='#fff';ctx.font='bold 52px Courier New';ctx.fillText('GAME OVER',210,185);
+    ctx.font='26px Courier New';ctx.fillText('Ricarica pagina',265,245);
+  }
+  if(world.win){
+    ctx.fillStyle='rgba(0,220,0,0.9)';ctx.fillRect(0,0,800,400);
+    ctx.fillStyle='#fff';ctx.font='bold 40px Courier New';ctx.fillText('LIVELLO FATTO!',200,185);
+  }
+}
+
+function loop(){update();draw();requestAnimationFrame(loop)}
+
+function startGame(){
+  initAudio();
+  document.getElementById('start').classList.add('hidden');
+  genLevel(world.level);
+  giraffa.y=280;giraffa.vy=0;giraffa.onGround=true;
+  world.scroll=0;world.started=true;world.gameOver=false;world.win=false;
+  loop();
+}
+
+function nextLevel(){
+  if(world.level<5){
+    world.level++;world.time=180;world.scroll=0;world.gameOver=false;world.started=false;
+    document.getElementById('lv').innerText=world.level;
+    giraffa.y=280;
+    document.getElementById('start').classList.remove('hidden');
+    document.querySelector('#start h1').innerText='LIVELLO '+world.level;
+  }else{
+    setTimeout(()=>alert('HAI COMPLETATO TUTTI I 5 LIVELLI!'),500);
+  }
+}
+
+function bindButton(id, key){
+  let el=document.getElementById(id);
+  el.addEventListener('touchstart',e=>{e.preventDefault();keys[key]=true});
+  el.addEventListener('touchend',e=>{e.preventDefault();keys[key]=false});
+  el.addEventListener('touchcancel',e=>{keys[key]=false});
+  el.addEventListener('mousedown',()=>keys[key]=true);
+  el.addEventListener('mouseup',()=>keys[key]=false);
+  el.addEventListener('mouseleave',()=>keys[key]=false);
+}
+
+bindButton('jump','jump');
+bindButton('fwd','fwd');
+bindButton('back','back');
+</script>
+</body>
+</html>
